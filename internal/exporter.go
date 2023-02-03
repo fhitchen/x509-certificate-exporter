@@ -262,6 +262,12 @@ func (exporter *Exporter) getLabels(certData *parsedCertificate, ref *certificat
 	fillLabelsFromName(&certData.cert.Issuer, "issuer", labels)
 	fillLabelsFromName(&certData.cert.Subject, "subject", labels)
 
+	if certData.cert.BasicConstraintsValid && certData.cert.IsCA {
+		labels["is_CA"] = "true"
+	} else {
+		labels["is_CA"] = "false"
+	}
+
 	if ref.format == certificateFormatYAML {
 		kind := strings.Split(certData.yqMatchExpr, ".")[1]
 		labels["embedded_kind"] = strings.TrimRight(kind, "s")

@@ -130,6 +130,22 @@ func (exporter *Exporter) getWatchedSecrets(namespace string) ([]v1.Secret, erro
 		return nil, err
 	}
 
+	watch, err := exporter.kubeClient.CoreV1().Secrets(namespace).Watch(context.Background(), metav1.ListOptions{
+		TypeMeta:             metav1.TypeMeta{},
+		LabelSelector:        labels.Set(labelSelector.MatchLabels).String(),
+		FieldSelector:        "",
+		Watch:                false,
+		AllowWatchBookmarks:  false,
+		ResourceVersion:      "",
+		ResourceVersionMatch: "",
+		TimeoutSeconds:       new(int64),
+		Limit:                0,
+		Continue:             "",
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	filteredSecrets, err := exporter.filterSecrets(secrets.Items, includedLabelsWithoutValue, excludedLabelsWithoutValue, excludedLabelsWithValue)
 	if err != nil {
 		return nil, err
@@ -143,6 +159,20 @@ func (exporter *Exporter) getWatchedSecrets(namespace string) ([]v1.Secret, erro
 	halfDuration := float64(exporter.MaxCacheDuration.Nanoseconds()) / 2
 	cacheDuration := halfDuration*float64(rand.Float64()) + halfDuration
 	exporter.secretsCache.Set(namespace, shrinkedSecrets, time.Duration(cacheDuration))
+
+	go func() {
+		for event := range watch.ResultChan() {
+			fmt.Printf(
+				"Watch Event: %s %s %s\n",
+				//event.Type, event.Object.GetObjectKind().GroupVersionKind().Kind,
+				event.Type, event.Object.(*v1.Secret).Type, event.Object.(*v1.Secret).Name,
+			)
+			fmt.Printf("Object: %v\n",
+				event.Object.(*v1.Secret),
+			)
+		}
+	}()
+
 	return shrinkedSecrets, nil
 }
 
