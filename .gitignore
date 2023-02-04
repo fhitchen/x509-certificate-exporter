@@ -4,5 +4,5 @@ __pycache__
 *.debug
 coverage.html
 /kubeconfig*
-x509-certifiate-exporter
+x509-certificate-exporter
 secrets/*
