@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
+	_ "k8s.io/client-go/plugin/pkg/client/auth/oidc"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -170,6 +171,11 @@ func (exporter *Exporter) getWatchedSecrets(namespace string) ([]v1.Secret, erro
 			fmt.Printf("Object: %v\n",
 				event.Object.(*v1.Secret),
 			)
+			secret := []v1.Secret{}
+			secret = append(secret, (*event.Object.(*v1.Secret).DeepCopy()))
+			filteredSecrets, err = exporter.filterSecrets(secret, includedLabelsWithoutValue, excludedLabelsWithoutValue, excludedLabelsWithValue)
+			fmt.Printf("Filtered Secret: %v\n", filteredSecrets)
+
 		}
 	}()
 
