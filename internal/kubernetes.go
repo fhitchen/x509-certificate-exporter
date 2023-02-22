@@ -96,9 +96,19 @@ func (exporter *Exporter) listNamespacesToWatch() ([]string, error) {
 }
 
 func (exporter *Exporter) getWatchedSecrets(namespace string) ([]v1.Secret, error) {
-	cachedSecrets, cached := exporter.secretsCache.Get(namespace)
+	_, cached := exporter.secretsCache.Get(namespace)
+	items := exporter.secretsCache.Items()
+	newSecrets := []v1.Secret{}
+
+	for key, item := range items {
+		if strings.HasPrefix(key, namespace+":") {
+			newSecrets = append(newSecrets, item.Object.(v1.Secret))
+		}
+	}
+
 	if cached {
-		return cachedSecrets.([]v1.Secret), nil
+		fmt.Printf("Returning cache for %s\n", namespace)
+		return newSecrets, nil
 	}
 
 	includedLabelsWithValue := map[string]string{}
@@ -124,13 +134,13 @@ func (exporter *Exporter) getWatchedSecrets(namespace string) ([]v1.Secret, erro
 	}
 
 	labelSelector := metav1.LabelSelector{MatchLabels: includedLabelsWithValue}
-	secrets, err := exporter.kubeClient.CoreV1().Secrets(namespace).List(context.Background(), metav1.ListOptions{
-		LabelSelector: labels.Set(labelSelector.MatchLabels).String(),
-	})
-	if err != nil {
-		return nil, err
-	}
-
+	/*	secrets, err := exporter.kubeClient.CoreV1().Secrets(namespace).List(context.Background(), metav1.ListOptions{
+			LabelSelector: labels.Set(labelSelector.MatchLabels).String(),
+		})
+		if err != nil {
+			return nil, err
+		}
+	*/
 	watch, err := exporter.kubeClient.CoreV1().Secrets(namespace).Watch(context.Background(), metav1.ListOptions{
 		TypeMeta:             metav1.TypeMeta{},
 		LabelSelector:        labels.Set(labelSelector.MatchLabels).String(),
@@ -146,17 +156,17 @@ func (exporter *Exporter) getWatchedSecrets(namespace string) ([]v1.Secret, erro
 	if err != nil {
 		return nil, err
 	}
-
-	filteredSecrets, err := exporter.filterSecrets(secrets.Items, includedLabelsWithoutValue, excludedLabelsWithoutValue, excludedLabelsWithValue)
-	if err != nil {
-		return nil, err
-	}
-
+	/*
+		filteredSecrets, err := exporter.filterSecrets(secrets.Items, includedLabelsWithoutValue, excludedLabelsWithoutValue, excludedLabelsWithValue)
+		if err != nil {
+			return nil, err
+		}
+	*/
 	shrinkedSecrets := []v1.Secret{}
-	for _, secret := range filteredSecrets {
-		shrinkedSecrets = append(shrinkedSecrets, exporter.shrinkSecret(secret))
-	}
-
+	/*	for _, secret := range filteredSecrets {
+			shrinkedSecrets = append(shrinkedSecrets, exporter.shrinkSecret(secret))
+		}
+	*/
 	halfDuration := float64(exporter.MaxCacheDuration.Nanoseconds()) / 2
 	cacheDuration := halfDuration*float64(rand.Float64()) + halfDuration
 	exporter.secretsCache.Set(namespace, shrinkedSecrets, time.Duration(cacheDuration))
@@ -165,7 +175,7 @@ func (exporter *Exporter) getWatchedSecrets(namespace string) ([]v1.Secret, erro
 		for event := range watch.ResultChan() {
 			secret := []v1.Secret{}
 			secret = append(secret, (*event.Object.(*v1.Secret).DeepCopy()))
-			filteredSecrets, err = exporter.filterSecrets(secret, includedLabelsWithoutValue, excludedLabelsWithoutValue, excludedLabelsWithValue)
+			filteredSecrets, _ := exporter.filterSecrets(secret, includedLabelsWithoutValue, excludedLabelsWithoutValue, excludedLabelsWithValue)
 			// todo err
 			if len(filteredSecrets) > 0 {
 				shrunkSecret := []v1.Secret{}
@@ -178,11 +188,11 @@ func (exporter *Exporter) getWatchedSecrets(namespace string) ([]v1.Secret, erro
 				)
 				switch event.Type {
 				case "ADDED":
-					exporter.addSecretToCache(namespace, shrunkSecret[0])
+					exporter.addSecretToCache(namespace, event.Object.(*v1.Secret).Name, shrunkSecret[0])
 				case "DELETED":
-					exporter.deleteSecretFromCache(namespace, shrunkSecret[0])
+					exporter.deleteSecretFromCache(namespace, event.Object.(*v1.Secret).Name, shrunkSecret[0])
 				case "MODIFIED":
-					exporter.modifySecretInCache(namespace, shrunkSecret[0])
+					exporter.modifySecretInCache(namespace, event.Object.(*v1.Secret).Name, shrunkSecret[0])
 				case "BOOKMARK":
 					log.Warnf("Unexpected BOOKMARK event received.")
 				case "ERROR":
@@ -196,69 +206,19 @@ func (exporter *Exporter) getWatchedSecrets(namespace string) ([]v1.Secret, erro
 	return shrinkedSecrets, nil
 }
 
-func (exporter *Exporter) addSecretToCache(namespace string, secret v1.Secret) {
-	cachedSecrets, cached := exporter.secretsCache.Get(namespace)
-	cache := []v1.Secret{}
-	newCache := []v1.Secret{}
-	found := false
-	if cached {
-		cache = cachedSecrets.([]v1.Secret)
-	}
-	for _, s := range cache {
-		if s.Name == secret.Name {
-			newCache = append(newCache, secret)
-			found = true
-		} else {
-			newCache = append(newCache, s)
-		}
-	}
-	if !found {
-		newCache = append(newCache, secret)
-	}
-	exporter.secretsCache.Set(namespace, newCache, exporter.MaxCacheDuration)
+func (exporter *Exporter) addSecretToCache(namespace, secretName string, secret v1.Secret) {
+
+	exporter.secretsCache.Set(namespace+":"+secretName, secret, exporter.MaxCacheDuration)
 }
 
-func (exporter *Exporter) deleteSecretFromCache(namespace string, secret v1.Secret) {
-	cachedSecrets, cached := exporter.secretsCache.Get(namespace)
-	cache := []v1.Secret{}
-	newCache := []v1.Secret{}
-	deleted := false
-	if cached {
-		cache = cachedSecrets.([]v1.Secret)
-	}
-	for _, s := range cache {
-		if s.Name == secret.Name {
-			deleted = true
-		} else {
-			newCache = append(newCache, s)
-		}
-	}
-	if !deleted {
-		log.Warnf("Secret %s was not deleted!\n", secret.Name)
-	}
-	exporter.secretsCache.Set(namespace, newCache, exporter.MaxCacheDuration)
+func (exporter *Exporter) deleteSecretFromCache(namespace, secretName string, secret v1.Secret) {
+
+	exporter.secretsCache.Delete(namespace + ":" + secretName)
 }
 
-func (exporter *Exporter) modifySecretInCache(namespace string, secret v1.Secret) {
-	cachedSecrets, cached := exporter.secretsCache.Get(namespace)
-	cache := []v1.Secret{}
-	newCache := []v1.Secret{}
-	modified := false
-	if cached {
-		cache = cachedSecrets.([]v1.Secret)
-	}
-	for _, s := range cache {
-		if s.Name == secret.Name {
-			newCache = append(newCache, secret)
-			modified = true
-		} else {
-			newCache = append(newCache, s)
-		}
-	}
-	if !modified {
-		log.Warnf("Secret %s was not modified!\n", secret.Name)
-	}
-	exporter.secretsCache.Set(namespace, newCache, exporter.MaxCacheDuration)
+func (exporter *Exporter) modifySecretInCache(namespace, secretName string, secret v1.Secret) {
+
+	exporter.secretsCache.Set(namespace+":"+secretName, secret, exporter.MaxCacheDuration)
 }
 
 func (exporter *Exporter) filterSecrets(secrets []v1.Secret, includedLabels, excludedLabels []string, excludedLabelsWithValue map[string]string) ([]v1.Secret, error) {
